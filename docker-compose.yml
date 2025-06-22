@@ -1,0 +1,60 @@
+name: hs
+
+networks:
+
+  default:
+    driver: bridge
+    name: net
+    ipam:
+     config:
+      - subnet: 172.24.44.0/24
+
+services:
+
+  nfsus:
+    # image: gitea.hs.mm/mbesar/nfsus:latest
+    image: ghcr.io/mmbesar/nfsuserver-container:latest
+    container_name: nfsus
+    restart: unless-stopped
+    # Set user to match host user (1000:1000)
+    user: "1000:1000"
+    networks:
+      - default
+    # Expose port for direct UDP/TCP game traffic
+    ports:
+      - "10900:10900/tcp"  # Redirector connections
+      - "10901:10901/tcp"  # Listener connections
+      - "10980:10980/tcp"  # Reporter connections
+      - "10800:10800/udp"  # ClientReporter UDP
+      - "10800:10800/tcp"  # ClientReporter TCP
+    # Volume mounts for configuration and data persistence
+    volumes:
+      - ./nfsu-server/config/nfsu.conf:/data/nfsu.conf:ro
+      - ./nfsu-server/config/news.txt:/data/news.txt:ro
+      - ./nfsu-server/data:/data
+      - ./nfsu-server/logs:/var/log/nfsu
+    # Environment variables
+    environment:
+      TZ: Africa/Cairo
+    # Resource limits for Pi4
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 256M
+        reservations:
+          cpus: '0.25'
+          memory: 64M
+    # Logging configuration
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    # Health check
+    healthcheck:
+      test: ["CMD", "pgrep", "nfsuserver"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
