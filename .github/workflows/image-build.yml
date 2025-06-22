@@ -22,7 +22,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        arch: [amd64, arm64]
+        arch: [amd64, arm64, armhf]
 
     outputs:
       image_name: ${{ steps.lowercase.outputs.image_name }}
@@ -83,4 +83,5 @@ jobs:
           docker buildx imagetools create \
             --tag ghcr.io/$IMAGE:latest \
             ghcr.io/$IMAGE:latest-amd64 \
-            ghcr.io/$IMAGE:latest-arm64
+            ghcr.io/$IMAGE:latest-arm64 \
+            ghcr.io/$IMAGE:latest-armhf
