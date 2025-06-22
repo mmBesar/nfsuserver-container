@@ -12,7 +12,6 @@ networks:
 services:
 
   nfsus:
-    # image: gitea.hs.mm/mbesar/nfsus:latest
     image: ghcr.io/mmbesar/nfsuserver-container:latest
     container_name: nfsus
     restart: unless-stopped
