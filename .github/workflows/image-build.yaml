@@ -1,10 +1,10 @@
 # ─────────────────────────────────────────────────────────────────────────────
-# Give the GITHUB_TOKEN permission to push packages
+# Grant token rights to push packages
 permissions:
-  contents: read          # we only need to read the repo
-  packages: write         # allow publishing to GitHub Container Registry
+  contents: read
+  packages: write
 
-name: Build & Push per-arch Docker Image
+name: Build, Push & Manifest Multi-Arch Image
 
 on:
   push:
@@ -14,40 +14,40 @@ on:
   workflow_dispatch:
 
 jobs:
+  # 1) build per-arch and push
   build:
     runs-on: ubuntu-latest
     strategy:
       matrix:
         arch: [amd64, arm64]
 
+    outputs:
+      image_name: ${{ steps.lowercase.outputs.image_name }}
+
     steps:
-      # 1. Checkout code
       - name: Checkout repo
         uses: actions/checkout@v3
 
-      # 2. Setup Buildx & QEMU
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v2
-      - name: Register QEMU for emulation
+
+      - name: Register QEMU (for emulation)
         uses: docker/setup-qemu-action@v2
 
-      # 3. Log into GHCR using the token with packages: write
-      - name: Log in to GitHub Container Registry
+      - name: Log in to GHCR
         uses: docker/login-action@v2
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # 4. Compute lowercase image name dynamically
       - name: Compute lowercase image name
         id: lowercase
         run: |
           IMAGE=$(echo $GITHUB_REPOSITORY | tr '[:upper:]' '[:lower:]')
           echo "image_name=$IMAGE" >> $GITHUB_OUTPUT
 
-      # 5. Build & push each architecture
-      - name: Build and push ${{ matrix.arch }}
+      - name: Build & push ${{ matrix.arch }}
         uses: docker/build-push-action@v3
         with:
           context: .
@@ -57,3 +57,28 @@ jobs:
           tags: |
             ghcr.io/${{ steps.lowercase.outputs.image_name }}:latest-${{ matrix.arch }}
             ghcr.io/${{ steps.lowercase.outputs.image_name }}:${{ github.sha }}-${{ matrix.arch }}
+
+  # 2) assemble the manifest list
+  manifest:
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v2
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create multi-arch manifest
+        run: |
+          IMAGE=${{ needs.build.outputs.image_name }}
+          # assemble the manifest list under ":latest"
+          docker buildx imagetools create \
+            --tag ghcr.io/$IMAGE:latest \
+            ghcr.io/$IMAGE:latest-amd64 \
+            ghcr.io/$IMAGE:latest-arm64
