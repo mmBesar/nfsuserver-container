@@ -12,7 +12,6 @@ Supported architectures: **amd64**, **arm64**, **armhf**.
   * `linux/amd64`
   * `linux/arm64`
   * `linux/arm/v7` (armhf)
-* Runs nfsuserver in user-space, no kernel modules required
 * Configurable exports via environment variables or mounted config
 * Based on a minimal Alpine Linux base image
 
@@ -20,7 +19,7 @@ Supported architectures: **amd64**, **arm64**, **armhf**.
 
 ## 🧑‍💻 Usage
 
-Pull and run the container with necessary privileges for NFS:
+Pull and run the container with:
 
 ```bash
 docker pull ghcr.io/mmbesar/nfsuserver-container:latest
