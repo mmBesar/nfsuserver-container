@@ -57,12 +57,13 @@ RUN mkdir -p /data \
     /var/log/supervisor \
     /run/nginx \
     /run/php-fpm83 \
+    /etc/supervisor/conf.d \
     && chown -R nfsu:nfsu /data /var/log/nfsu \
     && chown -R nginx:nginx /var/www/html /var/log/nginx /run/nginx \
     && chown -R nfsu:nfsu /run/php-fpm83
 
 # Configure Nginx
-RUN cat > /etc/nginx/nginx.conf << 'EOF'
+COPY <<EOF /etc/nginx/nginx.conf
 user nginx;
 worker_processes auto;
 error_log /var/log/nginx/error.log warn;
@@ -76,9 +77,9 @@ http {
     include /etc/nginx/mime.types;
     default_type application/octet-stream;
 
-    log_format main '$remote_addr - $remote_user [$time_local] "$request" '
-                    '$status $body_bytes_sent "$http_referer" '
-                    '"$http_user_agent" "$http_x_forwarded_for"';
+    log_format main '\$remote_addr - \$remote_user [\$time_local] "\$request" '
+                    '\$status \$body_bytes_sent "\$http_referer" '
+                    '"\$http_user_agent" "\$http_x_forwarded_for"';
 
     access_log /var/log/nginx/access.log main;
 
@@ -101,17 +102,17 @@ http {
         add_header X-XSS-Protection "1; mode=block" always;
 
         # PHP handling
-        location ~ \.php$ {
-            try_files $uri =404;
-            fastcgi_split_path_info ^(.+\.php)(/.+)$;
+        location ~ \.php\$ {
+            try_files \$uri =404;
+            fastcgi_split_path_info ^(.+\.php)(/.+)\$;
             fastcgi_pass unix:/run/php-fpm83/php-fpm.sock;
             fastcgi_index index.php;
-            fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
+            fastcgi_param SCRIPT_FILENAME \$document_root\$fastcgi_script_name;
             include fastcgi_params;
         }
 
         # Static files
-        location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot)$ {
+        location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot)\$ {
             expires 1y;
             add_header Cache-Control "public, immutable";
         }
@@ -121,7 +122,7 @@ http {
             deny all;
         }
 
-        location ~ ~$ {
+        location ~ ~\$ {
             deny all;
         }
     }
@@ -129,7 +130,7 @@ http {
 EOF
 
 # Configure PHP-FPM
-RUN cat > /etc/php83/php-fpm.d/www.conf << 'EOF'
+COPY <<EOF /etc/php83/php-fpm.d/www.conf
 [www]
 user = nfsu
 group = nfsu
@@ -149,7 +150,7 @@ php_value[session.save_path] = /tmp
 EOF
 
 # Configure PHP settings
-RUN cat > /etc/php83/conf.d/99-nfsu.ini << 'EOF'
+COPY <<EOF /etc/php83/conf.d/99-nfsu.ini
 ; NFSU Server Web UI Configuration
 memory_limit = 128M
 upload_max_filesize = 16M
@@ -172,8 +173,8 @@ allow_url_fopen = Off
 allow_url_include = Off
 EOF
 
-# Create supervisor configuration
-RUN cat > /etc/supervisor/conf.d/supervisord.conf << 'EOF'
+# Create supervisor configuration files
+COPY <<EOF /etc/supervisor/conf.d/supervisord.conf
 [supervisord]
 nodaemon=true
 user=root
@@ -208,7 +209,7 @@ stdout_logfile=/var/log/nginx/nginx.out.log
 EOF
 
 # Create startup script
-RUN cat > /usr/local/bin/start-nfsuserver.sh << 'EOF'
+COPY <<EOF /usr/local/bin/start-nfsuserver.sh
 #!/bin/sh
 set -e
 
