@@ -15,28 +15,28 @@ RUN git clone https://github.com/HarpyWar/nfsuserver.git
 WORKDIR /build/nfsuserver/nfsuserver
 RUN make
 
-# Runtime stage - minimal Alpine image with web server
+# Runtime stage - minimal Alpine image with web server support
 FROM alpine:3.19
 
-# Install runtime dependencies including web server
+# Install runtime dependencies including web server and PHP
 RUN apk add --no-cache \
     libstdc++ \
     libgcc \
-    nginx \
+    lighttpd \
     php83 \
     php83-fpm \
     php83-json \
     php83-session \
-    php83-mbstring \
-    php83-curl \
-    php83-xml \
-    php83-simplexml \
-    php83-dom \
     php83-pdo \
     php83-pdo_sqlite \
     php83-sqlite3 \
+    php83-mbstring \
+    php83-openssl \
+    php83-curl \
+    php83-xml \
+    php83-dom \
+    php83-ctype \
     php83-fileinfo \
-    php83-opcache \
     supervisor \
     && ln -sf /usr/bin/php83 /usr/bin/php
 
@@ -51,135 +51,77 @@ COPY --from=builder /build/nfsuserver/nfsuserver/nfsuserver /usr/local/bin/
 COPY --from=builder /build/nfsuserver/web /var/www/html/
 
 # Create necessary directories
-RUN mkdir -p /data \
-    /var/log/nfsu \
-    /var/log/nginx \
-    /var/log/supervisor \
-    /run/nginx \
-    /run/php-fpm83 \
-    /etc/supervisor/conf.d \
-    && chown -R nfsu:nfsu /data /var/log/nfsu \
-    && chown -R nginx:nginx /var/www/html /var/log/nginx /run/nginx \
-    && chown -R nfsu:nfsu /run/php-fpm83
+RUN mkdir -p /data /var/log/nfsu /var/log/lighttpd /var/lib/lighttpd /run/lighttpd /run/php && \
+    chown -R nfsu:nfsu /data /var/log/nfsu /var/www/html && \
+    chown -R lighttpd:lighttpd /var/log/lighttpd /var/lib/lighttpd /run/lighttpd && \
+    chown -R nfsu:nfsu /run/php
 
-# Configure Nginx
-COPY <<EOF /etc/nginx/nginx.conf
-user nginx;
-worker_processes auto;
-error_log /var/log/nginx/error.log warn;
-pid /run/nginx/nginx.pid;
+# Configure lighttpd for web UI
+RUN cat > /etc/lighttpd/lighttpd.conf << 'EOF'
+server.modules = (
+    "mod_access",
+    "mod_alias",
+    "mod_compress",
+    "mod_redirect",
+    "mod_rewrite",
+    "mod_fastcgi",
+    "mod_accesslog"
+)
 
-events {
-    worker_connections 1024;
-}
+server.document-root        = "/var/www/html"
+server.upload-dirs          = ( "/var/cache/lighttpd/uploads" )
+server.errorlog             = "/var/log/lighttpd/error.log"
+server.pid-file             = "/run/lighttpd/lighttpd.pid"
+server.username             = "lighttpd"
+server.groupname            = "lighttpd"
+server.port                 = 8080
 
-http {
-    include /etc/nginx/mime.types;
-    default_type application/octet-stream;
+index-file.names            = ( "index.php", "index.html", "index.lighttpd.html" )
+url.access-deny             = ( "~", ".inc" )
+static-file.exclude-extensions = ( ".php", ".pl", ".fcgi" )
 
-    log_format main '\$remote_addr - \$remote_user [\$time_local] "\$request" '
-                    '\$status \$body_bytes_sent "\$http_referer" '
-                    '"\$http_user_agent" "\$http_x_forwarded_for"';
+compress.cache-dir          = "/var/cache/lighttpd/compress/"
+compress.filetype           = ( "application/javascript", "text/css", "text/html", "text/plain" )
 
-    access_log /var/log/nginx/access.log main;
+# default listening port for IPv6 falls back to the IPv4 port
+include_shell "/usr/share/lighttpd/use-ipv6.pl " + server.port
+include_shell "/usr/share/lighttpd/create-mime.assign.pl"
+include_shell "/usr/share/lighttpd/include-conf-enabled.pl"
 
-    sendfile on;
-    tcp_nopush on;
-    tcp_nodelay on;
-    keepalive_timeout 65;
-    types_hash_max_size 2048;
-
-    server {
-        listen 80 default_server;
-        listen [::]:80 default_server;
-        server_name _;
-        root /var/www/html;
-        index index.php index.html index.htm;
-
-        # Security headers
-        add_header X-Frame-Options "SAMEORIGIN" always;
-        add_header X-Content-Type-Options "nosniff" always;
-        add_header X-XSS-Protection "1; mode=block" always;
-
-        # PHP handling
-        location ~ \.php\$ {
-            try_files \$uri =404;
-            fastcgi_split_path_info ^(.+\.php)(/.+)\$;
-            fastcgi_pass unix:/run/php-fpm83/php-fpm.sock;
-            fastcgi_index index.php;
-            fastcgi_param SCRIPT_FILENAME \$document_root\$fastcgi_script_name;
-            include fastcgi_params;
-        }
-
-        # Static files
-        location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot)\$ {
-            expires 1y;
-            add_header Cache-Control "public, immutable";
-        }
-
-        # Deny access to sensitive files
-        location ~ /\. {
-            deny all;
-        }
-
-        location ~ ~\$ {
-            deny all;
-        }
-    }
-}
+# FastCGI for PHP
+fastcgi.server = (
+    ".php" => (
+        "localhost" => (
+            "socket"                => "/run/php/php83-fpm.sock",
+            "broken-scriptfilename" => "enable"
+        )
+    )
+)
 EOF
 
 # Configure PHP-FPM
-COPY <<EOF /etc/php83/php-fpm.d/www.conf
+RUN cat > /etc/php83/php-fpm.d/www.conf << 'EOF'
 [www]
 user = nfsu
 group = nfsu
-listen = /run/php-fpm83/php-fpm.sock
-listen.owner = nginx
-listen.group = nginx
+listen = /run/php/php83-fpm.sock
+listen.owner = nfsu
+listen.group = nfsu
 listen.mode = 0660
 pm = dynamic
 pm.max_children = 5
 pm.start_servers = 2
 pm.min_spare_servers = 1
 pm.max_spare_servers = 3
-pm.max_requests = 500
-php_admin_value[error_log] = /var/log/nfsu/php_errors.log
-php_admin_flag[log_errors] = on
-php_value[session.save_path] = /tmp
 EOF
 
-# Configure PHP settings
-COPY <<EOF /etc/php83/conf.d/99-nfsu.ini
-; NFSU Server Web UI Configuration
-memory_limit = 128M
-upload_max_filesize = 16M
-post_max_size = 16M
-max_execution_time = 30
-max_input_time = 60
-display_errors = Off
-log_errors = On
-error_log = /var/log/nfsu/php_errors.log
-
-; Session configuration
-session.save_path = /tmp
-session.gc_maxlifetime = 1440
-session.cookie_httponly = On
-session.use_strict_mode = On
-
-; Security
-expose_php = Off
-allow_url_fopen = Off
-allow_url_include = Off
-EOF
-
-# Create supervisor configuration files
-COPY <<EOF /etc/supervisor/conf.d/supervisord.conf
+# Configure supervisor to run both services
+RUN cat > /etc/supervisor/conf.d/nfsuserver.conf << 'EOF'
 [supervisord]
 nodaemon=true
 user=root
+pidfile=/var/run/supervisord.pid
 logfile=/var/log/supervisor/supervisord.log
-pidfile=/run/supervisord.pid
 
 [program:nfsuserver]
 command=/usr/local/bin/nfsuserver
@@ -187,143 +129,64 @@ directory=/data
 user=nfsu
 autostart=true
 autorestart=true
-stderr_logfile=/var/log/nfsu/nfsuserver.err.log
-stdout_logfile=/var/log/nfsu/nfsuserver.out.log
-environment=HOME="/data",USER="nfsu"
+stdout_logfile=/var/log/nfsu/server.log
+stderr_logfile=/var/log/nfsu/server.error.log
+environment=HOME="/home/nfsu",USER="nfsu"
 
 [program:php-fpm]
 command=/usr/sbin/php-fpm83 --nodaemonize --fpm-config /etc/php83/php-fpm.conf
 user=root
 autostart=true
 autorestart=true
-stderr_logfile=/var/log/nfsu/php-fpm.err.log
-stdout_logfile=/var/log/nfsu/php-fpm.out.log
+stdout_logfile=/var/log/php-fpm.log
+stderr_logfile=/var/log/php-fpm.error.log
 
-[program:nginx]
-command=/usr/sbin/nginx -g 'daemon off;'
+[program:lighttpd]
+command=/usr/sbin/lighttpd -D -f /etc/lighttpd/lighttpd.conf
 user=root
 autostart=true
 autorestart=true
-stderr_logfile=/var/log/nginx/nginx.err.log
-stdout_logfile=/var/log/nginx/nginx.out.log
+stdout_logfile=/var/log/lighttpd/access.log
+stderr_logfile=/var/log/lighttpd/error.log
 EOF
 
-# Create startup script
-COPY <<EOF /usr/local/bin/start-nfsuserver.sh
-#!/bin/sh
-set -e
-
-# Create necessary directories if they don't exist
-mkdir -p /data /var/log/nfsu /tmp
-chown -R nfsu:nfsu /data /var/log/nfsu
-
-# Create default config if it doesn't exist
-if [ ! -f /data/nfsu.conf ]; then
-    cat > /data/nfsu.conf << 'EOC'
-# NFS Underground Server Configuration
-ServerName=NFSU Docker Server
-MaxPlayers=16
-ServerPassword=
-
-# Network Settings
-ServerIP=0.0.0.0
-ServerExternalIP=0.0.0.0
-RedirectorPort=10900
-ListenerPort=10901
-ReporterPort=10980
-ClientReporterPort=10800
-ClientReporterPortUDP=10800
-ClientReporterPortTCP=10800
-
-# Game Settings
-TrackRotation=1
-DefaultLaps=3
-MaxLaps=10
-AllowSpectators=1
-AutoStartRace=0
-RaceTimeout=300
-LobbyTimeout=60
-
-# Player Settings
-AllowDuplicateNames=0
-RequireRegistration=0
-MaxNameLength=20
-BanDuration=3600
-
-# Logging Settings
-LogLevel=2
-LogToFile=1
-LogFileName=/var/log/nfsu/server.log
-LogRotate=1
-MaxLogSize=10485760
-
-# Database Settings
-DatabaseFile=/data/rusers.dat
-BackupDatabase=1
-BackupInterval=3600
-
-# Web UI Settings
-WebUIEnabled=1
-WebUIPort=80
-WebUIPath=/var/www/html
-EOC
-    chown nfsu:nfsu /data/nfsu.conf
-fi
-
-# Create default news.txt if it doesn't exist
-if [ ! -f /data/news.txt ]; then
-    cat > /data/news.txt << 'EOC'
-===============================================
-WELCOME TO NFS UNDERGROUND SERVER
-===============================================
-📰 NEWS & ANNOUNCEMENTS:
-• Server is now online with Web UI!
-• Access web interface at http://your-server-ip
-• New players welcome - register your profile!
-
-🏎️ SERVER RULES:
-• No cheating, hacking, or exploiting
-• Respect other players
-• No offensive language or behavior
-
-🔧 WEB INTERFACE:
-• Monitor server status
-• View connected players
-• Manage server settings
-• Check race statistics
-
-===============================================
-HAVE FUN AND RACE SAFELY!
-===============================================
-EOC
-    chown nfsu:nfsu /data/news.txt
-fi
-
-# Set proper permissions for web files
-chown -R nginx:nginx /var/www/html
-find /var/www/html -type f -exec chmod 644 {} \;
-find /var/www/html -type d -exec chmod 755 {} \;
-
-# Start supervisor
-exec /usr/bin/supervisord -c /etc/supervisor/conf.d/supervisord.conf
-EOF
-
-RUN chmod +x /usr/local/bin/start-nfsuserver.sh
+# Create cache directory for lighttpd
+RUN mkdir -p /var/cache/lighttpd/compress /var/cache/lighttpd/uploads && \
+    chown -R lighttpd:lighttpd /var/cache/lighttpd
 
 # Set working directory
 WORKDIR /data
 
-# Expose all NFSU ports plus HTTP for web UI
+# Expose all NFSU ports and web UI port
 EXPOSE 10900/tcp \
        10901/tcp \
        10980/tcp \
        10800/tcp \
        10800/udp \
-       80/tcp
+       8080/tcp
 
-# Health check for both server and web UI
-HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
-    CMD pgrep nfsuserver && pgrep nginx && pgrep php-fpm83 || exit 1
+# Health check - check both nfsuserver and lighttpd
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD pgrep nfsuserver && pgrep lighttpd || exit 1
 
-# Run the startup script
-CMD ["/usr/local/bin/start-nfsuserver.sh"]
+# Create startup script to handle permissions and initialization
+RUN cat > /usr/local/bin/docker-entrypoint.sh << 'EOF'
+#!/bin/sh
+set -e
+
+# Ensure correct permissions
+chown -R nfsu:nfsu /data /var/www/html
+chown -R lighttpd:lighttpd /var/log/lighttpd /var/lib/lighttpd /run/lighttpd /var/cache/lighttpd
+chown -R nfsu:nfsu /run/php
+
+# Create required directories if they don't exist
+mkdir -p /var/log/supervisor /var/log/nfsu
+
+# Start supervisor
+exec /usr/bin/supervisord -c /etc/supervisor/conf.d/nfsuserver.conf
+EOF
+
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+
+# Run with supervisor managing both services
+CMD ["/usr/local/bin/docker-entrypoint.sh"]
