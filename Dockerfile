@@ -198,6 +198,94 @@ RUN cat > /usr/local/bin/configure-webui.sh << 'EOF'
 #!/bin/sh
 # Configure web UI to connect to the local nfsuserver
 
+echo "Configuring Web UI..."
+echo "Contents of /var/www/html:"
+ls -la /var/www/html/ || echo "Directory doesn't exist!"
+
+# If web directory is empty, create a simple index page
+if [ ! -f /var/www/html/index.php ] && [ ! -f /var/www/html/index.html ]; then
+    echo "Creating basic web UI since original web directory is empty..."
+    cat > /var/www/html/index.php << 'WEBEOF'
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NFS Underground Server</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 40px; background: #f4f4f4; }
+        .container { max-width: 800px; margin: 0 auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        h1 { color: #333; text-align: center; }
+        .status { background: #e8f5e8; padding: 15px; border-radius: 5px; margin: 20px 0; }
+        .info { background: #f0f8ff; padding: 15px; border-radius: 5px; margin: 20px 0; }
+        .server-info { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin: 20px 0; }
+        .card { background: #f9f9f9; padding: 15px; border-radius: 5px; border-left: 4px solid #007cba; }
+        .footer { text-align: center; margin-top: 30px; color: #666; font-size: 0.9em; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🏎️ NFS Underground Server</h1>
+        
+        <div class="status">
+            <h3>✅ Server Status: Online</h3>
+            <p>The NFS Underground server is running and ready for connections.</p>
+        </div>
+
+        <div class="server-info">
+            <div class="card">
+                <h4>🌐 Server Info</h4>
+                <p><strong>Server:</strong> <?php echo gethostname(); ?></p>
+                <p><strong>Time:</strong> <?php echo date('Y-m-d H:i:s'); ?></p>
+                <p><strong>Uptime:</strong> <?php echo shell_exec('uptime -p') ?: 'N/A'; ?></p>
+            </div>
+            
+            <div class="card">
+                <h4>🎮 Game Ports</h4>
+                <p><strong>Redirector:</strong> 10900/tcp</p>
+                <p><strong>Listener:</strong> 10901/tcp</p>
+                <p><strong>Reporter:</strong> 10980/tcp</p>
+                <p><strong>ClientReporter:</strong> 10800/tcp+udp</p>
+            </div>
+        </div>
+
+        <div class="info">
+            <h4>📋 Server Files</h4>
+            <p><strong>Data Directory:</strong> /data</p>
+            <p><strong>Config File:</strong> <?php echo file_exists('/data/nfsu.conf') ? '✅ Found' : '❌ Missing'; ?></p>
+            <p><strong>Users Database:</strong> <?php echo file_exists('/data/rusers.dat') ? '✅ Found (' . filesize('/data/rusers.dat') . ' bytes)' : '❌ Not created yet'; ?></p>
+            <p><strong>News File:</strong> <?php echo file_exists('/data/news.txt') ? '✅ Found' : '❌ Missing'; ?></p>
+        </div>
+
+        <div class="info">
+            <h4>🔧 Process Status</h4>
+            <p><strong>NFSU Server:</strong> <?php echo shell_exec('pgrep nfsuserver') ? '✅ Running (PID: ' . trim(shell_exec('pgrep nfsuserver')) . ')' : '❌ Not running'; ?></p>
+            <p><strong>Nginx:</strong> <?php echo shell_exec('pgrep nginx') ? '✅ Running' : '❌ Not running'; ?></p>
+            <p><strong>PHP-FPM:</strong> <?php echo shell_exec('pgrep php-fpm') ? '✅ Running' : '❌ Not running'; ?></p>
+        </div>
+
+        <div class="info">
+            <h4>📊 Server Logs (Last 10 lines)</h4>
+            <pre style="background: #000; color: #0f0; padding: 10px; border-radius: 5px; overflow-x: auto; font-size: 0.8em;"><?php
+                $logFile = '/var/log/nfsu/nfsuserver.out.log';
+                if (file_exists($logFile)) {
+                    echo htmlspecialchars(shell_exec("tail -n 10 $logFile"));
+                } else {
+                    echo "No log file found yet.";
+                }
+            ?></pre>
+        </div>
+
+        <div class="footer">
+            <p>NFSU Server Web UI - Container Version</p>
+            <p>Original server by <a href="https://github.com/HarpyWar/nfsuserver">HarpyWar/nfsuserver</a></p>
+        </div>
+    </div>
+</body>
+</html>
+WEBEOF
+fi
+
 # Create basic web UI config if it doesn't exist
 if [ ! -f /var/www/html/config.php ]; then
     cat > /var/www/html/config.php << 'WEBEOF'
@@ -225,7 +313,7 @@ WEBEOF
 fi
 
 # Set proper permissions
-chown -R nfsu:nfsu /var/www/html
+chown -R nginx:nginx /var/www/html
 chmod 755 /var/www/html
 find /var/www/html -type f -name "*.php" -exec chmod 644 {} \;
 
@@ -242,6 +330,8 @@ chown nfsu:nfsu /var/log/nfsu
 chmod 755 /var/log/nfsu
 
 echo "Web UI configured successfully!"
+echo "Web files in /var/www/html:"
+ls -la /var/www/html/
 EOF
 
 RUN chmod +x /usr/local/bin/configure-webui.sh
@@ -262,6 +352,10 @@ mkdir -p /data /var/log/nfsu /run/nginx /run/php
 # Set proper permissions
 chown -R nfsu:nfsu /data /var/log/nfsu /run/php
 chown -R nginx:nginx /run/nginx
+
+# Test nginx configuration
+echo "Testing nginx configuration..."
+/usr/sbin/nginx -t
 
 # Start supervisord which manages all services
 exec /usr/bin/supervisord -c /etc/supervisor/conf.d/nfsuserver.conf
