@@ -1,58 +1,22 @@
-name: hs
-
-networks:
-
-  default:
-    driver: bridge
-    name: net
-    ipam:
-     config:
-      - subnet: 172.24.44.0/24
-
 services:
-
-  nfsus:
-    image: ghcr.io/mmbesar/nfsuserver-container:latest
-    container_name: nfsus
+  nfsus-testing:
+    image: ghcr.io/mmbesar/nfsuserver-container:testing
+    container_name: nfsus-testing
     restart: unless-stopped
-    # Set user to match host user (1000:1000)
-    user: "1000:1000"
-    networks:
-      - default
-    # Expose port for direct UDP/TCP game traffic
     ports:
-      - "10900:10900/tcp"  # Redirector connections
-      - "10901:10901/tcp"  # Listener connections
-      - "10980:10980/tcp"  # Reporter connections
-      - "10800:10800/udp"  # ClientReporter UDP
-      - "10800:10800/tcp"  # ClientReporter TCP
-    # Volume mounts for configuration and data persistence
+      - "10900:10900/tcp"
+      - "10901:10901/tcp" 
+      - "10980:10980/tcp"
+      - "10800:10800/udp"
+      - "10800:10800/tcp"
+      - "80:80/tcp"          # Web UI
     volumes:
-      - ./nfsu-server/config/nfsu.conf:/data/nfsu.conf:ro
-      - ./nfsu-server/config/news.txt:/data/news.txt:ro
-      - ./nfsu-server/data:/data
-      - ./nfsu-server/logs:/var/log/nfsu
-    # Environment variables
+      - ./data:/data
+      - ./logs:/var/log/nfsu
     environment:
-      TZ: Africa/Cairo
-    # Resource limits for Pi4
-    deploy:
-      resources:
-        limits:
-          cpus: '1.0'
-          memory: 256M
-        reservations:
-          cpus: '0.25'
-          memory: 64M
-    # Logging configuration
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "3"
-    # Health check
+      - TZ=Africa/Cairo
     healthcheck:
-      test: ["CMD", "pgrep", "nfsuserver"]
+      test: ["CMD", "sh", "-c", "pgrep nfsuserver && pgrep nginx && pgrep php-fpm83"]
       interval: 30s
       timeout: 10s
       retries: 3
