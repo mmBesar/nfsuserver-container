@@ -187,41 +187,39 @@ extension=sockets
 EOF
 
 # Configure supervisord
-RUN cat > /etc/supervisor/conf.d/services.conf << 'EOF'
-[supervisord]
-nodaemon=true
-user=root
-logfile=/var/log/nfsu/supervisord.log
-pidfile=/run/supervisord.pid
-loglevel=info
-
-[program:nfsuserver]
-command=/usr/local/bin/nfsuserver
-directory=/data
-user=nfsu
-autostart=true
-autorestart=true
-stderr_logfile=/var/log/nfsu/nfsuserver.err.log
-stdout_logfile=/var/log/nfsu/nfsuserver.out.log
-environment=HOME=/data,USER=nfsu
-priority=10
-
-[program:nginx]
-command=/usr/sbin/nginx -g 'daemon off;'
-autostart=true
-autorestart=true
-stderr_logfile=/var/log/nfsu/nginx.err.log
-stdout_logfile=/var/log/nfsu/nginx.out.log
-priority=20
-
-[program:php-fpm]
-command=/usr/sbin/php-fpm82 -F
-autostart=true
-autorestart=true
-stderr_logfile=/var/log/nfsu/php-fpm.err.log
-stdout_logfile=/var/log/nfsu/php-fpm.out.log
-priority=30
-EOF
+RUN echo '[supervisord]' > /etc/supervisor/conf.d/services.conf && \
+    echo 'nodaemon=true' >> /etc/supervisor/conf.d/services.conf && \
+    echo 'user=root' >> /etc/supervisor/conf.d/services.conf && \
+    echo 'logfile=/var/log/nfsu/supervisord.log' >> /etc/supervisor/conf.d/services.conf && \
+    echo 'pidfile=/run/supervisord.pid' >> /etc/supervisor/conf.d/services.conf && \
+    echo 'loglevel=info' >> /etc/supervisor/conf.d/services.conf && \
+    echo '' >> /etc/supervisor/conf.d/services.conf && \
+    echo '[program:nfsuserver]' >> /etc/supervisor/conf.d/services.conf && \
+    echo 'command=/usr/local/bin/nfsuserver' >> /etc/supervisor/conf.d/services.conf && \
+    echo 'directory=/data' >> /etc/supervisor/conf.d/services.conf && \
+    echo 'user=nfsu' >> /etc/supervisor/conf.d/services.conf && \
+    echo 'autostart=true' >> /etc/supervisor/conf.d/services.conf && \
+    echo 'autorestart=true' >> /etc/supervisor/conf.d/services.conf && \
+    echo 'stderr_logfile=/var/log/nfsu/nfsuserver.err.log' >> /etc/supervisor/conf.d/services.conf && \
+    echo 'stdout_logfile=/var/log/nfsu/nfsuserver.out.log' >> /etc/supervisor/conf.d/services.conf && \
+    echo 'environment=HOME=/data,USER=nfsu' >> /etc/supervisor/conf.d/services.conf && \
+    echo 'priority=10' >> /etc/supervisor/conf.d/services.conf && \
+    echo '' >> /etc/supervisor/conf.d/services.conf && \
+    echo '[program:nginx]' >> /etc/supervisor/conf.d/services.conf && \
+    echo 'command=/usr/sbin/nginx -g "daemon off;"' >> /etc/supervisor/conf.d/services.conf && \
+    echo 'autostart=true' >> /etc/supervisor/conf.d/services.conf && \
+    echo 'autorestart=true' >> /etc/supervisor/conf.d/services.conf && \
+    echo 'stderr_logfile=/var/log/nfsu/nginx.err.log' >> /etc/supervisor/conf.d/services.conf && \
+    echo 'stdout_logfile=/var/log/nfsu/nginx.out.log' >> /etc/supervisor/conf.d/services.conf && \
+    echo 'priority=20' >> /etc/supervisor/conf.d/services.conf && \
+    echo '' >> /etc/supervisor/conf.d/services.conf && \
+    echo '[program:php-fpm]' >> /etc/supervisor/conf.d/services.conf && \
+    echo 'command=/usr/sbin/php-fpm82 -F' >> /etc/supervisor/conf.d/services.conf && \
+    echo 'autostart=true' >> /etc/supervisor/conf.d/services.conf && \
+    echo 'autorestart=true' >> /etc/supervisor/conf.d/services.conf && \
+    echo 'stderr_logfile=/var/log/nfsu/php-fpm.err.log' >> /etc/supervisor/conf.d/services.conf && \
+    echo 'stdout_logfile=/var/log/nfsu/php-fpm.out.log' >> /etc/supervisor/conf.d/services.conf && \
+    echo 'priority=30' >> /etc/supervisor/conf.d/services.conf
 
 # Create startup script
 RUN cat > /usr/local/bin/start-nfsuserver.sh << 'EOF'
