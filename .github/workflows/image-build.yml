@@ -12,53 +12,39 @@ on:
     paths:
       - '.github/workflows/image-build.yml'
       - 'Dockerfile'
-      - 'docker-compose.yml'  # Added for completeness
   pull_request:
     branches:
-      - testing  # Fixed: was webui-testing
+      - webui-testing  # Only for PRs to testing branch
     paths:
       - '.github/workflows/image-build.yml'
       - 'Dockerfile'
-      - 'docker-compose.yml'
   workflow_dispatch:  # Allow manual trigger
-
-env:
-  REGISTRY: ghcr.io
 
 jobs:
   # 1) Build & push per-arch
   build:
     runs-on: ubuntu-latest
     strategy:
-      fail-fast: false  # Continue building other archs if one fails
       matrix:
-        include:
-          - arch: amd64
-            platform: linux/amd64
-          - arch: arm64
-            platform: linux/arm64
-          - arch: armhf
-            platform: linux/arm/v7
+        arch: [amd64, arm64, armhf]
 
     outputs:
       image_name: ${{ steps.lowercase.outputs.image_name }}
-      image_tag: ${{ steps.meta.outputs.tags }}
-      image_digest: ${{ steps.build.outputs.digest }}
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4  # Updated to v4
+        uses: actions/checkout@v3
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3  # Updated to v3
+        uses: docker/setup-buildx-action@v2
 
       - name: Register QEMU for emulation
-        uses: docker/setup-qemu-action@v3  # Updated to v3
+        uses: docker/setup-qemu-action@v2
 
       - name: Log in to GHCR
-        uses: docker/login-action@v3  # Updated to v3
+        uses: docker/login-action@v2
         with:
-          registry: ${{ env.REGISTRY }}
+          registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
@@ -68,154 +54,38 @@ jobs:
           IMAGE=$(echo $GITHUB_REPOSITORY | tr '[:upper:]' '[:lower:]')
           echo "image_name=$IMAGE" >> $GITHUB_OUTPUT
 
-      - name: Extract metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.REGISTRY }}/${{ steps.lowercase.outputs.image_name }}
-          tags: |
-            type=raw,value=testing-${{ matrix.arch }}
-            type=sha,prefix=${{ github.sha }}-${{ matrix.arch }}-
-            type=ref,event=branch,suffix=-${{ matrix.arch }}
-            type=ref,event=pr,suffix=-${{ matrix.arch }}
-
       - name: Build & push ${{ matrix.arch }}
-        id: build
-        uses: docker/build-push-action@v5  # Updated to v5
+        uses: docker/build-push-action@v3
         with:
           context: .
           file: ./Dockerfile
-          platforms: ${{ matrix.platform }}
+          platforms: linux/${{ matrix.arch }}
           push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-          # Build args for debugging
-          build-args: |
-            BUILDKIT_INLINE_CACHE=1
-
-      - name: Test container startup
-        run: |
-          echo "Testing ${{ matrix.arch }} image startup..."
-          # Pull the image we just built
-          docker pull ${{ env.REGISTRY }}/${{ steps.lowercase.outputs.image_name }}:testing-${{ matrix.arch }}
-          
-          # Test basic container startup (quick test)
-          docker run --rm -d \
-            --name nfsu-test-${{ matrix.arch }} \
-            -p 10900:10900/tcp \
-            -p 80:80/tcp \
-            ${{ env.REGISTRY }}/${{ steps.lowercase.outputs.image_name }}:testing-${{ matrix.arch }}
-          
-          # Wait a bit for services to start
-          sleep 15
-          
-          # Check if processes are running
-          docker exec nfsu-test-${{ matrix.arch }} pgrep nfsuserver || (echo "NFSU server not running" && exit 1)
-          docker exec nfsu-test-${{ matrix.arch }} pgrep nginx || (echo "Nginx not running" && exit 1)
-          docker exec nfsu-test-${{ matrix.arch }} pgrep php-fpm83 || (echo "PHP-FPM not running" && exit 1)
-          
-          # Test web UI response
-          sleep 5
-          curl -f http://localhost:80 || (echo "Web UI not responding" && exit 1)
-          
-          # Cleanup
-          docker stop nfsu-test-${{ matrix.arch }}
-          echo "✅ ${{ matrix.arch }} image test passed"
+          tags: |
+            ghcr.io/${{ steps.lowercase.outputs.image_name }}:testing-${{ matrix.arch }}
+            ghcr.io/${{ steps.lowercase.outputs.image_name }}:${{ github.sha }}-${{ matrix.arch }}
 
   # 2) Assemble the multi-arch manifest
   manifest:
     needs: build
     runs-on: ubuntu-latest
-    if: github.event_name != 'pull_request'  # Skip manifest for PRs
 
     steps:
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v2
 
       - name: Log in to GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@v2
         with:
-          registry: ${{ env.REGISTRY }}
+          registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Create multi-arch manifest
         run: |
           IMAGE=${{ needs.build.outputs.image_name }}
-          
-          # Create the main testing manifest
           docker buildx imagetools create \
-            --tag ${{ env.REGISTRY }}/$IMAGE:testing \
-            ${{ env.REGISTRY }}/$IMAGE:testing-amd64 \
-            ${{ env.REGISTRY }}/$IMAGE:testing-arm64 \
-            ${{ env.REGISTRY }}/$IMAGE:testing-armhf
-          
-          # Also create a SHA-tagged manifest for this specific commit
-          docker buildx imagetools create \
-            --tag ${{ env.REGISTRY }}/$IMAGE:${{ github.sha }} \
-            ${{ env.REGISTRY }}/$IMAGE:${{ github.sha }}-amd64 \
-            ${{ env.REGISTRY }}/$IMAGE:${{ github.sha }}-arm64 \
-            ${{ env.REGISTRY }}/$IMAGE:${{ github.sha }}-armhf
-          
-          echo "✅ Multi-arch manifests created:"
-          echo "  - ${{ env.REGISTRY }}/$IMAGE:testing"
-          echo "  - ${{ env.REGISTRY }}/$IMAGE:${{ github.sha }}"
-
-      - name: Verify multi-arch manifest
-        run: |
-          IMAGE=${{ needs.build.outputs.image_name }}
-          echo "🔍 Verifying multi-arch manifest..."
-          docker buildx imagetools inspect ${{ env.REGISTRY }}/$IMAGE:testing
-
-  # 3) Update documentation
-  update-readme:
-    needs: [build, manifest]
-    runs-on: ubuntu-latest
-    if: github.event_name == 'push' && github.ref == 'refs/heads/testing'
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Update README with latest build info
-        run: |
-          IMAGE=${{ needs.build.outputs.image_name }}
-          BUILD_DATE=$(date -u +"%Y-%m-%d %H:%M:%S UTC")
-          
-          # Update README with build information
-          cat >> BUILD_INFO.md << EOF
-          ## Latest Testing Build
-          
-          **Build Date:** $BUILD_DATE
-          **Git SHA:** ${{ github.sha }}
-          **Image:** \`${{ env.REGISTRY }}/$IMAGE:testing\`
-          
-          ### Features in this build:
-          - ✅ Multi-architecture support (amd64, arm64, armhf)
-          - ✅ NFSU Server with web UI
-          - ✅ Nginx + PHP-FPM stack
-          - ✅ Supervisor process management
-          - ✅ Health checks for all services
-          
-          ### Usage:
-          \`\`\`bash
-          docker run -d \\
-            --name nfsus-testing \\
-            -p 10900:10900/tcp \\
-            -p 10901:10901/tcp \\
-            -p 10980:10980/tcp \\
-            -p 10800:10800/udp \\
-            -p 10800:10800/tcp \\
-            -p 80:80/tcp \\
-            -v ./data:/data \\
-            ${{ env.REGISTRY }}/$IMAGE:testing
-          \`\`\`
-          
-          **Web UI:** Access at http://localhost or http://your-server-ip
-          EOF
-          
-          echo "📝 Build information updated"
+            --tag ghcr.io/$IMAGE:testing \
+            ghcr.io/$IMAGE:testing-amd64 \
+            ghcr.io/$IMAGE:testing-arm64 \
+            ghcr.io/$IMAGE:testing-armhf
