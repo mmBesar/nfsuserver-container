@@ -203,11 +203,11 @@ autostart=true
 autorestart=true
 stderr_logfile=/var/log/nfsu/nfsuserver.err.log
 stdout_logfile=/var/log/nfsu/nfsuserver.out.log
-environment=HOME="/data",USER="nfsu"
+environment=HOME=/data,USER=nfsu
 priority=10
 
 [program:nginx]
-command=/usr/sbin/nginx -g "daemon off;"
+command=/usr/sbin/nginx -g 'daemon off;'
 autostart=true
 autorestart=true
 stderr_logfile=/var/log/nfsu/nginx.err.log
