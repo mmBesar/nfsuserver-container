@@ -38,6 +38,7 @@ RUN apk add --no-cache \
     php82-ctype \
     php82-fileinfo \
     php82-opcache \
+    php82-sockets \
     supervisor \
     curl \
     && ln -sf /usr/bin/php82 /usr/bin/php
@@ -49,7 +50,7 @@ RUN addgroup -g 1000 nfsu && \
 # Copy the built binary
 COPY --from=builder /build/nfsuserver/nfsuserver/nfsuserver /usr/local/bin/
 
-# Copy the web UI files
+# Copy the original web UI files
 COPY --from=builder /build/nfsuserver/web /var/www/html
 
 # Create necessary directories
@@ -58,7 +59,7 @@ RUN mkdir -p /data /var/log/nfsu /var/www/html /run/nginx /run/php /etc/supervis
     chown -R nginx:nginx /var/www/html /run/nginx && \
     chown -R nfsu:nfsu /run/php
 
-# Configure nginx
+# Configure nginx for the web UI
 RUN cat > /etc/nginx/nginx.conf << 'EOF'
 user nginx;
 worker_processes auto;
@@ -94,6 +95,9 @@ http {
         
         server_name _;
         
+        # Allow larger file uploads for web UI
+        client_max_body_size 32M;
+        
         location / {
             try_files $uri $uri/ /index.php?$query_string;
         }
@@ -105,9 +109,23 @@ http {
             include fastcgi_params;
             fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
             fastcgi_param PATH_INFO $fastcgi_path_info;
+            fastcgi_param DOCUMENT_ROOT $document_root;
+            
+            # Pass server data directory to PHP
+            fastcgi_param NFSU_DATA_DIR /data;
+            fastcgi_param NFSU_LOG_DIR /var/log/nfsu;
         }
         
+        # Deny access to sensitive files
         location ~ /\.ht {
+            deny all;
+        }
+        
+        location ~ /\.git {
+            deny all;
+        }
+        
+        location ~ \.(log|dat|conf)$ {
             deny all;
         }
         
@@ -116,7 +134,7 @@ http {
         add_header X-XSS-Protection "1; mode=block" always;
         add_header X-Content-Type-Options "nosniff" always;
         add_header Referrer-Policy "no-referrer-when-downgrade" always;
-        add_header Content-Security-Policy "default-src 'self' http: https: data: blob: 'unsafe-inline'" always;
+        add_header Content-Security-Policy "default-src 'self' 'unsafe-inline' 'unsafe-eval' data: blob:" always;
     }
 }
 EOF
@@ -124,13 +142,13 @@ EOF
 # Configure PHP-FPM
 RUN cat > /etc/php82/php-fpm.d/www.conf << 'EOF'
 [www]
-user = nfsu
-group = nfsu
+user = nginx
+group = nginx
 listen = 127.0.0.1:9000
-listen.owner = nfsu
-listen.group = nfsu
+listen.owner = nginx
+listen.group = nginx
 pm = dynamic
-pm.max_children = 5
+pm.max_children = 10
 pm.start_servers = 2
 pm.min_spare_servers = 1
 pm.max_spare_servers = 3
@@ -140,6 +158,7 @@ php_admin_value[post_max_size] = 32M
 php_admin_value[memory_limit] = 128M
 php_admin_value[max_execution_time] = 60
 php_admin_value[session.save_path] = /tmp
+php_admin_value[error_log] = /var/log/nfsu/php_errors.log
 EOF
 
 # Configure PHP
@@ -158,6 +177,9 @@ post_max_size = 32M
 max_input_vars = 3000
 memory_limit = 128M
 max_execution_time = 60
+
+; Enable sockets for server communication
+extension=sockets
 EOF
 
 # Configure supervisord
@@ -196,142 +218,92 @@ EOF
 # Create web UI configuration script
 RUN cat > /usr/local/bin/configure-webui.sh << 'EOF'
 #!/bin/sh
-# Configure web UI to connect to the local nfsuserver
+set -e
 
-echo "Configuring Web UI..."
-echo "Contents of /var/www/html:"
-ls -la /var/www/html/ || echo "Directory doesn't exist!"
+echo "Configuring NFSU Web UI..."
 
-# If web directory is empty, create a simple index page
-if [ ! -f /var/www/html/index.php ] && [ ! -f /var/www/html/index.html ]; then
-    echo "Creating basic web UI since original web directory is empty..."
-    cat > /var/www/html/index.php << 'WEBEOF'
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>NFS Underground Server</title>
-    <style>
-        body { font-family: Arial, sans-serif; margin: 40px; background: #f4f4f4; }
-        .container { max-width: 800px; margin: 0 auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
-        h1 { color: #333; text-align: center; }
-        .status { background: #e8f5e8; padding: 15px; border-radius: 5px; margin: 20px 0; }
-        .info { background: #f0f8ff; padding: 15px; border-radius: 5px; margin: 20px 0; }
-        .server-info { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin: 20px 0; }
-        .card { background: #f9f9f9; padding: 15px; border-radius: 5px; border-left: 4px solid #007cba; }
-        .footer { text-align: center; margin-top: 30px; color: #666; font-size: 0.9em; }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <h1>🏎️ NFS Underground Server</h1>
-        
-        <div class="status">
-            <h3>✅ Server Status: Online</h3>
-            <p>The NFS Underground server is running and ready for connections.</p>
-        </div>
-
-        <div class="server-info">
-            <div class="card">
-                <h4>🌐 Server Info</h4>
-                <p><strong>Server:</strong> <?php echo gethostname(); ?></p>
-                <p><strong>Time:</strong> <?php echo date('Y-m-d H:i:s'); ?></p>
-                <p><strong>Uptime:</strong> <?php echo shell_exec('uptime -p') ?: 'N/A'; ?></p>
-            </div>
-            
-            <div class="card">
-                <h4>🎮 Game Ports</h4>
-                <p><strong>Redirector:</strong> 10900/tcp</p>
-                <p><strong>Listener:</strong> 10901/tcp</p>
-                <p><strong>Reporter:</strong> 10980/tcp</p>
-                <p><strong>ClientReporter:</strong> 10800/tcp+udp</p>
-            </div>
-        </div>
-
-        <div class="info">
-            <h4>📋 Server Files</h4>
-            <p><strong>Data Directory:</strong> /data</p>
-            <p><strong>Config File:</strong> <?php echo file_exists('/data/nfsu.conf') ? '✅ Found' : '❌ Missing'; ?></p>
-            <p><strong>Users Database:</strong> <?php echo file_exists('/data/rusers.dat') ? '✅ Found (' . filesize('/data/rusers.dat') . ' bytes)' : '❌ Not created yet'; ?></p>
-            <p><strong>News File:</strong> <?php echo file_exists('/data/news.txt') ? '✅ Found' : '❌ Missing'; ?></p>
-        </div>
-
-        <div class="info">
-            <h4>🔧 Process Status</h4>
-            <p><strong>NFSU Server:</strong> <?php echo shell_exec('pgrep nfsuserver') ? '✅ Running (PID: ' . trim(shell_exec('pgrep nfsuserver')) . ')' : '❌ Not running'; ?></p>
-            <p><strong>Nginx:</strong> <?php echo shell_exec('pgrep nginx') ? '✅ Running' : '❌ Not running'; ?></p>
-            <p><strong>PHP-FPM:</strong> <?php echo shell_exec('pgrep php-fpm') ? '✅ Running' : '❌ Not running'; ?></p>
-        </div>
-
-        <div class="info">
-            <h4>📊 Server Logs (Last 10 lines)</h4>
-            <pre style="background: #000; color: #0f0; padding: 10px; border-radius: 5px; overflow-x: auto; font-size: 0.8em;"><?php
-                $logFile = '/var/log/nfsu/nfsuserver.out.log';
-                if (file_exists($logFile)) {
-                    echo htmlspecialchars(shell_exec("tail -n 10 $logFile"));
-                } else {
-                    echo "No log file found yet.";
-                }
-            ?></pre>
-        </div>
-
-        <div class="footer">
-            <p>NFSU Server Web UI - Container Version</p>
-            <p>Original server by <a href="https://github.com/HarpyWar/nfsuserver">HarpyWar/nfsuserver</a></p>
-        </div>
-    </div>
-</body>
-</html>
-WEBEOF
-fi
-
-# Create basic web UI config if it doesn't exist
+# Create web UI config if it doesn't exist
 if [ ! -f /var/www/html/config.php ]; then
     cat > /var/www/html/config.php << 'WEBEOF'
 <?php
 // NFSU Server Web UI Configuration
-define('NFSU_SERVER_HOST', 'localhost');
+// This file connects the web UI to the server
+
+// Server connection settings
+define('NFSU_SERVER_HOST', '127.0.0.1');
 define('NFSU_SERVER_PORT', 10900);
+define('NFSU_ADMIN_PORT', 9998);  // Admin port for server management
+
+// Data directories
 define('NFSU_DATA_DIR', '/data');
 define('NFSU_LOG_DIR', '/var/log/nfsu');
 define('NFSU_USERS_FILE', '/data/rusers.dat');
 define('NFSU_CONFIG_FILE', '/data/nfsu.conf');
 define('NFSU_NEWS_FILE', '/data/news.txt');
+define('NFSU_LOG_FILE', '/var/log/nfsu/nfsuserver.out.log');
 
-// Web UI Settings
-define('WEBUI_TITLE', 'NFS Underground Server');
+// Web UI settings
+define('WEBUI_TITLE', 'NFS Underground Server Admin');
 define('WEBUI_ADMIN_PASSWORD', 'admin123'); // Change this!
 define('WEBUI_SESSION_TIMEOUT', 3600);
-define('WEBUI_LOG_LEVEL', 'info');
+define('WEBUI_REFRESH_INTERVAL', 10);
 
-// Database settings (if using database features)
-define('DB_TYPE', 'sqlite');
-define('DB_PATH', '/data/webui.db');
+// Server executable path
+define('NFSU_SERVER_BINARY', '/usr/local/bin/nfsuserver');
+
+// Enable web UI features
+define('ENABLE_SERVER_CONTROL', true);
+define('ENABLE_USER_MANAGEMENT', true);
+define('ENABLE_LOG_VIEWER', true);
+define('ENABLE_CONFIG_EDITOR', true);
 ?>
 WEBEOF
 fi
 
-# Set proper permissions
-chown -R nginx:nginx /var/www/html
-chmod 755 /var/www/html
-find /var/www/html -type f -name "*.php" -exec chmod 644 {} \;
+# Create .htaccess for better security if not exists
+if [ ! -f /var/www/html/.htaccess ]; then
+    cat > /var/www/html/.htaccess << 'WEBEOF'
+# Deny access to sensitive files
+<Files ~ "\.(dat|log|conf)$">
+    Deny from all
+</Files>
 
-# Create web UI database if it doesn't exist
-if [ ! -f /data/webui.db ]; then
-    touch /data/webui.db
-    chown nfsu:nfsu /data/webui.db
-    chmod 644 /data/webui.db
+<Files ~ "^\.">
+    Deny from all
+</Files>
+
+# PHP settings
+php_value upload_max_filesize 32M
+php_value post_max_size 32M
+php_value max_execution_time 60
+php_value memory_limit 128M
+WEBEOF
 fi
 
-# Ensure log directory exists and has proper permissions
+# Set proper permissions for web UI
+chown -R nginx:nginx /var/www/html
+find /var/www/html -type f -exec chmod 644 {} \;
+find /var/www/html -type d -exec chmod 755 {} \;
+
+# Make sure PHP can read data directory
+chmod 755 /data
+chmod 644 /data/* 2>/dev/null || true
+
+# Create web UI session directory
+mkdir -p /tmp/php-sessions
+chown nginx:nginx /tmp/php-sessions
+chmod 700 /tmp/php-sessions
+
+# Create web UI log directory
 mkdir -p /var/log/nfsu
 chown nfsu:nfsu /var/log/nfsu
 chmod 755 /var/log/nfsu
 
 echo "Web UI configured successfully!"
-echo "Web files in /var/www/html:"
+echo "Web UI files:"
 ls -la /var/www/html/
+echo "Access the web UI at: http://your-server-ip:80"
+echo "Default admin password: admin123 (please change this!)"
 EOF
 
 RUN chmod +x /usr/local/bin/configure-webui.sh
@@ -343,15 +315,57 @@ set -e
 
 echo "Starting NFSU Server with Web UI..."
 
+# Create necessary directories
+mkdir -p /data /var/log/nfsu /run/nginx /run/php /tmp/php-sessions
+
 # Configure web UI
 /usr/local/bin/configure-webui.sh
 
-# Create necessary directories
-mkdir -p /data /var/log/nfsu /run/nginx /run/php
-
 # Set proper permissions
 chown -R nfsu:nfsu /data /var/log/nfsu /run/php
-chown -R nginx:nginx /run/nginx
+chown -R nginx:nginx /run/nginx /tmp/php-sessions
+
+# Create default config if it doesn't exist
+if [ ! -f /data/nfsu.conf ]; then
+    cat > /data/nfsu.conf << 'CONFEOF'
+# NFSU Server Configuration
+ServerName=Docker NFSU Server
+ServerIP=0.0.0.0
+MaxPlayers=16
+RedirectorPort=10900
+ListenerPort=10901
+ReporterPort=10980
+ClientReporterPort=10800
+ClientReporterPortUDP=10800
+ClientReporterPortTCP=10800
+Verbose=1
+EnableLogFile=1
+LogLevel=2
+AdminPassword=admin123
+AdminPort=9998
+EnableRemoteAdmin=1
+CONFEOF
+    chown nfsu:nfsu /data/nfsu.conf
+fi
+
+# Create default news file if it doesn't exist
+if [ ! -f /data/news.txt ]; then
+    cat > /data/news.txt << 'NEWSEOF'
+=======================================
+WELCOME TO NFSU SERVER
+=======================================
+
+Server is online and ready for racing!
+
+- Web UI available at port 80
+- Default admin password: admin123
+- Please change the default password!
+
+Have fun racing!
+=======================================
+NEWSEOF
+    chown nfsu:nfsu /data/news.txt
+fi
 
 # Test nginx configuration
 echo "Testing nginx configuration..."
