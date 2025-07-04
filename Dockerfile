@@ -39,6 +39,7 @@ RUN apk add --no-cache \
     php82-fileinfo \
     php82-opcache \
     supervisor \
+    curl \
     && ln -sf /usr/bin/php82 /usr/bin/php
 
 # Create non-root user for security
@@ -52,7 +53,7 @@ COPY --from=builder /build/nfsuserver/nfsuserver/nfsuserver /usr/local/bin/
 COPY --from=builder /build/nfsuserver/web /var/www/html
 
 # Create necessary directories
-RUN mkdir -p /data /var/log/nfsu /var/www/html /run/nginx /run/php && \
+RUN mkdir -p /data /var/log/nfsu /var/www/html /run/nginx /run/php /etc/supervisor/conf.d && \
     chown -R nfsu:nfsu /data /var/log/nfsu && \
     chown -R nginx:nginx /var/www/html /run/nginx && \
     chown -R nfsu:nfsu /run/php
