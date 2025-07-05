@@ -7,14 +7,18 @@ name: Build, Push & Manifest Multi-Arch Image
 
 on:
   push:
+    branches:
+      - main  # Only trigger on testing branch
     paths:
       - '.github/workflows/image-build.yml'
       - 'Dockerfile'
   pull_request:
+    branches:
+      - main  # Only for PRs to testing branch
     paths:
       - '.github/workflows/image-build.yml'
       - 'Dockerfile'
-  workflow_dispatch:
+  workflow_dispatch:  # Allow manual trigger
 
 jobs:
   # 1) Build & push per-arch
