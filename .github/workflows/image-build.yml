@@ -14,7 +14,7 @@ on:
       - 'Dockerfile'
   pull_request:
     branches:
-      - webui-testing  # Only for PRs to testing branch
+      - testing  # Only for PRs to testing branch
     paths:
       - '.github/workflows/image-build.yml'
       - 'Dockerfile'
